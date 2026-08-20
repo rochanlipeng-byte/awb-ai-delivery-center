@@ -1,0 +1,3 @@
+User-agent: *
+Allow: /
+Sitemap: https://rochanlipeng-byte.github.io/awb-ai-delivery-center/sitemap.xml
