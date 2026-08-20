@@ -1,0 +1,74 @@
+name: Public access check
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Verify public HTTPS responses
+        run: |
+          node <<'NODE'
+          const base = 'https://rochanlipeng-byte.github.io/awb-ai-delivery-center/';
+          const userAgents = {
+            desktop: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/140 Safari/537.36',
+            iphone: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 Version/18.6 Mobile/15E148 Safari/604.1',
+            wechat: 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_6 like Mac OS X) AppleWebKit/605.1.15 Mobile/15E148 MicroMessenger/8.0.60 NetType/WIFI Language/zh_CN',
+          };
+
+          const pause = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+          async function get(url, userAgent, expectedStatus = 200) {
+            let lastError;
+            for (let attempt = 1; attempt <= 3; attempt += 1) {
+              try {
+                const response = await fetch(url, {
+                  redirect: 'follow',
+                  headers: userAgent ? { 'user-agent': userAgent } : {},
+                  signal: AbortSignal.timeout(60000),
+                });
+                const body = await response.text();
+                if (response.status !== expectedStatus) {
+                  throw new Error(`${url} returned ${response.status}, expected ${expectedStatus}`);
+                }
+                return { response, body };
+              } catch (error) {
+                lastError = error;
+                if (attempt < 3) await pause(attempt * 1500);
+              }
+            }
+            throw lastError;
+          }
+
+          for (const [name, userAgent] of Object.entries(userAgents)) {
+            const { response, body } = await get(base, userAgent);
+            if (!body.includes('<title>企业AI应用事业部 · 客户服务中心</title>')) {
+              throw new Error(`${name}: expected page title not found`);
+            }
+            if (/Attention Required|Sorry, you have been blocked|Cloudflare Ray ID/i.test(body)) {
+              throw new Error(`${name}: security block page detected`);
+            }
+            console.log(`${name}: ${response.status} ${response.url} content=PASS no-block=PASS`);
+          }
+
+          for (const asset of ['robots.txt', 'sitemap.xml', 'favicon.ico', 'og-image.png', 'site.webmanifest']) {
+            const { response } = await get(base + asset);
+            console.log(`${asset}: ${response.status} ${response.headers.get('content-type')}`);
+          }
+
+          const missing = await get(base + 'this-route-must-not-exist', userAgents.desktop, 404);
+          if (!missing.body.includes('这个页面不存在')) throw new Error('custom 404 content missing');
+          console.log('custom-404: 404 content=PASS');
+          NODE
