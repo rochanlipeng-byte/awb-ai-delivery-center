@@ -72,3 +72,128 @@ jobs:
           if (!missing.body.includes('这个页面不存在')) throw new Error('custom 404 content missing');
           console.log('custom-404: 404 content=PASS');
           NODE
+
+  browser:
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Install browser test runtime
+        run: |
+          npm install --no-save playwright@1.55.0
+          npx playwright install chromium
+      - name: Exercise desktop and mobile interactions
+        run: |
+          node --input-type=module <<'NODE'
+          import { chromium } from 'playwright';
+
+          const base = 'https://rochanlipeng-byte.github.io/awb-ai-delivery-center/';
+          const viewports = [
+            ['desktop-1440', 1440, 1000],
+            ['desktop-1366', 1366, 900],
+            ['mobile-390', 390, 844],
+            ['mobile-430', 430, 932],
+          ];
+
+          const browser = await chromium.launch({ headless: true });
+          const context = await browser.newContext({ locale: 'zh-CN' });
+          await context.grantPermissions(['clipboard-read', 'clipboard-write'], {
+            origin: 'https://rochanlipeng-byte.github.io',
+          });
+          const results = [];
+
+          for (const [name, width, height] of viewports) {
+            const page = await context.newPage();
+            const errors = [];
+            page.on('console', (message) => {
+              if (message.type() === 'error') errors.push(`console:${message.text()}`);
+            });
+            page.on('pageerror', (error) => errors.push(`pageerror:${error.message}`));
+            await page.setViewportSize({ width, height });
+            const response = await page.goto(base, { waitUntil: 'networkidle', timeout: 120000 });
+            if (!response || response.status() !== 200) throw new Error(`${name}: public HTTP failed`);
+            if ((await page.title()) !== '企业AI应用事业部 · 客户服务中心') throw new Error(`${name}: title mismatch`);
+            const body = await page.locator('body').innerText();
+            if (/Attention Required|Sorry, you have been blocked|Cloudflare Ray ID/i.test(body)) {
+              throw new Error(`${name}: security block detected`);
+            }
+            if (!(await page.locator('h1').isVisible())) throw new Error(`${name}: hero not visible`);
+            const initialOverflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+            if (initialOverflow > 1) throw new Error(`${name}: initial overflow ${initialOverflow}px`);
+
+            if (width > 1080) {
+              if (!(await page.locator('header .menu').isVisible())) throw new Error(`${name}: desktop nav hidden`);
+              for (const link of await page.locator('header .menu a[href^="#"]').all()) await link.click();
+            } else {
+              if (!(await page.locator('#menuButton').isVisible())) throw new Error(`${name}: menu button hidden`);
+              await page.locator('#menuButton').click();
+              if (!(await page.locator('#mobileMenu').evaluate((element) => element.classList.contains('open')))) {
+                throw new Error(`${name}: mobile menu did not open`);
+              }
+              await page.locator('#mobileMenu a').first().click();
+            }
+
+            await page.locator('#toolSearch').fill('询盘');
+            if ((await page.locator('#toolGrid .tool').count()) < 3) throw new Error(`${name}: tool search failed`);
+            await page.locator('#toolSearch').fill('');
+            for (const tab of await page.locator('#toolTabs .tab').all()) {
+              await tab.click();
+              if ((await page.locator('#toolGrid .tool').count()) === 0) throw new Error(`${name}: empty tool filter`);
+            }
+            await page.locator('#toolTabs .tab[data-filter="all"]').click();
+
+            await page.locator('#promptGrid .prompt-card button').first().click();
+            if ((await page.locator('#promptModal').getAttribute('aria-hidden')) !== 'false') {
+              throw new Error(`${name}: prompt modal failed`);
+            }
+            await page.locator('#promptModal .modal-actions .primary').click();
+            if ((await page.evaluate(() => navigator.clipboard.readText())).trim().length < 100) {
+              throw new Error(`${name}: prompt copy failed`);
+            }
+            await page.locator('#promptModal .close').click();
+
+            await page.locator('.contact-btn').click();
+            if ((await page.locator('#contactModal a[href="tel:19933138577"]').count()) !== 1) {
+              throw new Error(`${name}: phone link missing`);
+            }
+            await page.getByRole('button', { name: '复制微信号' }).click();
+            if ((await page.evaluate(() => navigator.clipboard.readText())) !== '398083763') {
+              throw new Error(`${name}: WeChat copy failed`);
+            }
+            await page.locator('#contactModal .close').click();
+
+            const firstFaq = page.locator('#faq details').first();
+            await firstFaq.locator('summary').click();
+            if ((await firstFaq.getAttribute('open')) === null) throw new Error(`${name}: FAQ failed`);
+            const finalOverflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+            if (finalOverflow > 1) throw new Error(`${name}: interaction overflow ${finalOverflow}px`);
+            if (errors.length) throw new Error(`${name}: runtime errors ${errors.join(' | ')}`);
+
+            await page.evaluate(() => window.scrollTo(0, 0));
+            await page.screenshot({ path: `awb-${name}.png`, fullPage: false });
+            results.push({
+              name,
+              viewport: `${width}x${height}`,
+              http: response.status(),
+              overflow: finalOverflow,
+              runtimeErrors: errors.length,
+              navigation: 'PASS',
+              tools: 'PASS',
+              promptCopy: 'PASS',
+              contact: 'PASS',
+              phone: 'PASS',
+              wechatCopy: 'PASS',
+            });
+            await page.close();
+          }
+
+          await browser.close();
+          console.log(JSON.stringify(results));
+          NODE
+      - name: Save viewport screenshots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: public-viewport-screenshots
+          path: awb-*.png
+          if-no-files-found: ignore
