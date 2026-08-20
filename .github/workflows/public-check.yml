@@ -171,10 +171,7 @@ jobs:
             if (finalOverflow > 1) throw new Error(`${name}: interaction overflow ${finalOverflow}px`);
             if (errors.length) throw new Error(`${name}: runtime errors ${errors.join(' | ')}`);
 
-            await page.evaluate(() => {
-              document.documentElement.style.scrollBehavior = 'auto';
-              window.scrollTo(0, 0);
-            });
+            await page.goto(base, { waitUntil: 'networkidle', timeout: 120000 });
             await page.waitForTimeout(300);
             await page.screenshot({ path: `awb-${name}.png`, fullPage: false });
             results.push({
