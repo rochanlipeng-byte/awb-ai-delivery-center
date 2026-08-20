@@ -153,7 +153,7 @@ jobs:
             await page.locator('#promptModal .close').click();
 
             await page.locator('.contact-btn').click();
-            if ((await page.locator('#contactModal a[href="tel:19933138577"]').count()) !== 1) {
+            if ((await page.locator('#contactModal a[href="tel:19933138577"]').count()) < 2) {
               throw new Error(`${name}: phone link missing`);
             }
             await page.getByRole('button', { name: '复制微信号' }).click();
